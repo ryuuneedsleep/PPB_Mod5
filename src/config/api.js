@@ -49,6 +49,7 @@ apiClient.interceptors.request.use(
 // ---------------------------------------------------------------------------
 // Response interceptor — unwrap response and normalise errors
 // ---------------------------------------------------------------------------
+// Response interceptor unwrap response and normalise errors
 apiClient.interceptors.response.use(
   (response) => response.data,
   (error) => {
@@ -57,10 +58,16 @@ apiClient.interceptors.response.use(
 
     if (error.response) {
       status = error.response.status
+      const errPayload = error.response.data?.error
+
+      // Ekstrak string jika errorPayload berbentuk object { code, message }
+      const extractedError =
+        typeof errPayload === 'object' ? errPayload?.message : errPayload
+
       message =
         error.response.data?.message ||
         error.response.data?.msg ||
-        error.response.data?.error ||
+        extractedError ||
         error.response.data?.error_description ||
         `Server error (${status})`
     } else if (error.request) {
@@ -68,6 +75,11 @@ apiClient.interceptors.response.use(
         'Unable to reach the server. Check your connection and try again.'
     } else {
       message = error.message || message
+    }
+
+    // Pastikan message selalu berupa string murni
+    if (typeof message === 'object') {
+      message = message?.message || JSON.stringify(message)
     }
 
     return Promise.reject({
@@ -78,5 +90,3 @@ apiClient.interceptors.response.use(
     })
   },
 )
-
-export { apiClient, BASE_URL, SUPABASE_KEY, IS_SUPABASE }
