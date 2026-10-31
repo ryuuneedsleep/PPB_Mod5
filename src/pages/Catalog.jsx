@@ -6,7 +6,7 @@ import GunCard from '../components/gun/GunCard'
 import GunDetail from '../components/gun/GunDetail'
 import AdvancedFilter from '../components/common/AdvancedFilter'
 import ConfirmModal from '../components/modals/ConfirmModal'
-import gunService from '../services/gunService'
+import { archiveGun, getArchivedGuns } from '../utils/archiveStorage'
 import {
   matchesSearch,
   matchesCategory,
@@ -14,30 +14,23 @@ import {
   extractCategories,
 } from '../utils/helpers'
 
-/**
- * Catalog page — the main product listing.
- *
- * Data source priority:
- *   1. Live API via useGuns()
- *   2. Local static array (GUNS_LOCAL) when the API is unreachable
- *
- * Features: search, category filter, sort, CRUD actions, detail modal.
- */
-export default function Catalog({ onNavigate }) {
-  // ---- API data ----
+export default function Catalog({ onNavigate, onAddToCart }) {
   const { guns: apiGuns, loading, error, refetch } = useGuns({ limit: 50 })
   const [useLocal, setUseLocal] = useState(false)
 
-  // Decide data source
-  const rawGuns = useMemo(() => {
-    if (useLocal || (error && apiGuns.length === 0)) {
-      // Enrich local data with synthetic ids so FavoriteButton and detail work
-      return GUNS_LOCAL.map((g, i) => ({ ...g, id: g.id || `local-${i}` }))
-    }
-    return apiGuns
-  }, [apiGuns, error, useLocal])
+  // Ambil daftar yang diarsipkan (soft-deleted)
+  const archivedGuns = useMemo(() => getArchivedGuns(), [])
+  const archivedIds = useMemo(() => new Set(archivedGuns.map((g) => g.id || g.name)), [archivedGuns])
 
-  // ---- filters / sort ----
+  const rawGuns = useMemo(() => {
+    let source = apiGuns
+    if (useLocal || (error && apiGuns.length === 0)) {
+      source = GUNS_LOCAL.map((g, i) => ({ ...g, id: g.id || `local-${i}` }))
+    }
+    // Filter Soft Delete: hilangkan yang sudah diarsipkan
+    return source.filter((g) => !archivedIds.has(g.id || g.name))
+  }, [apiGuns, error, useLocal, archivedIds])
+
   const [search, setSearch] = useState('')
   const [activeCategory, setActiveCategory] = useState('All')
   const [sortKey, setSortKey] = useState('name')
@@ -47,54 +40,43 @@ export default function Catalog({ onNavigate }) {
 
   const filteredGuns = useMemo(() => {
     let result = rawGuns.filter(
-      (g) => matchesSearch(g, search) && matchesCategory(g, activeCategory),
+      (g) => matchesSearch(g, search) && matchesCategory(g, activeCategory)
     )
     return sortItems(result, sortKey, sortOrder)
   }, [rawGuns, search, activeCategory, sortKey, sortOrder])
 
-  // ---- detail view ----
   const [selectedGun, setSelectedGun] = useState(null)
-
-  // ---- delete ----
   const [deleteTarget, setDeleteTarget] = useState(null)
-  const [deleting, setDeleting] = useState(false)
-  const [deleteError, setDeleteError] = useState('')
 
-  const handleDelete = async () => {
+  // Soft Delete Handler
+  const handleSoftDelete = () => {
     if (!deleteTarget) return
-    try {
-      setDeleting(true)
-      setDeleteError('')
-      await gunService.deleteGun(deleteTarget.id)
-      setDeleteTarget(null)
-      refetch()
-    } catch (err) {
-      setDeleteError(err.message || 'Failed to delete.')
-    } finally {
-      setDeleting(false)
-    }
+    archiveGun(deleteTarget)
+    setDeleteTarget(null)
+    refetch()
   }
 
-  // ---- If viewing a single product detail ----
   if (selectedGun) {
     return (
       <GunDetail
         gun={selectedGun}
         onBack={() => setSelectedGun(null)}
         onEdit={(g) => onNavigate && onNavigate('Edit', g)}
-        onDelete={(g) => { setSelectedGun(null); setDeleteTarget(g) }}
+        onDelete={(g) => {
+          setSelectedGun(null)
+          setDeleteTarget(g)
+        }}
+        onAddToCart={onAddToCart}
       />
     )
   }
 
-  // ---- Main catalog view ----
   return (
     <>
       <section className="masthead">
         <h1 className="display">Hardware, by the spec sheet.</h1>
         <p className="lede">
-          A small armory of pistols, rifles, and shotguns. Every piece listed
-          with its type, caliber, and price — nothing else.
+          A small armory of pistols, rifles, and shotguns. Every piece listed with its type, caliber, and price — nothing else.
         </p>
       </section>
 
@@ -117,7 +99,6 @@ export default function Catalog({ onNavigate }) {
           </div>
         </div>
 
-        {/* Filters */}
         <AdvancedFilter
           search={search}
           onSearch={setSearch}
@@ -126,14 +107,16 @@ export default function Catalog({ onNavigate }) {
           onCategory={setActiveCategory}
           sortKey={sortKey}
           sortOrder={sortOrder}
-          onSort={({ key, order }) => { setSortKey(key); setSortOrder(order) }}
+          onSort={({ key, order }) => {
+            setSortKey(key)
+            setSortOrder(order)
+          }}
         />
 
-        {/* States */}
         {loading && (
           <div className="state-box">
             <Loader size={28} className="spin" />
-            <p>Loading products…</p>
+            <p>Loading products from cache / server...</p>
           </div>
         )}
 
@@ -159,11 +142,10 @@ export default function Catalog({ onNavigate }) {
         {!loading && filteredGuns.length === 0 && !error && (
           <div className="state-box">
             <PackageOpen size={28} />
-            <p>No products match your search.</p>
+            <p>No products match your search or filters.</p>
           </div>
         )}
 
-        {/* Product grid */}
         {filteredGuns.length > 0 && (
           <ul className="stock">
             {filteredGuns.map((gun) => (
@@ -173,39 +155,23 @@ export default function Catalog({ onNavigate }) {
                 onSelect={setSelectedGun}
                 onEdit={onNavigate ? (g) => onNavigate('Edit', g) : undefined}
                 onDelete={setDeleteTarget}
+                onAddToCart={onAddToCart}
               />
             ))}
           </ul>
         )}
-
-        {useLocal && (
-          <p className="local-notice">
-            Showing local catalog (server unavailable).{' '}
-            <button
-              type="button"
-              className="link-btn"
-              onClick={() => { setUseLocal(false); refetch() }}
-            >
-              Retry server
-            </button>
-          </p>
-        )}
       </section>
 
-      {/* Delete confirmation */}
+      {/* Confirm Soft Delete (Arsipkan) */}
       <ConfirmModal
-        open={!!deleteTarget}
-        title="Delete Product"
-        message={`Are you sure you want to delete "${deleteTarget?.name}"? This action cannot be undone.`}
-        confirmLabel="Delete"
+        open={Boolean(deleteTarget)}
+        title="Arsipkan Senjata (Soft Delete)"
+        message={`Apakah Anda yakin ingin memindahkan "${deleteTarget?.name}" ke arsip? Senjata ini dapat dipulihkan kembali dari menu Profile.`}
+        confirmLabel="Arsipkan"
         danger
-        loading={deleting}
-        onConfirm={handleDelete}
-        onCancel={() => { setDeleteTarget(null); setDeleteError('') }}
+        onConfirm={handleSoftDelete}
+        onCancel={() => setDeleteTarget(null)}
       />
-      {deleteError && (
-        <div className="toast toast--error">{deleteError}</div>
-      )}
     </>
   )
 }

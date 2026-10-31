@@ -1,0 +1,30 @@
+// @ts-nocheck
+const ARCHIVE_KEY = 'bore_barrel_archived_guns'
+
+export const getArchivedGuns = () => {
+    try {
+        return JSON.parse(localStorage.getItem(ARCHIVE_KEY) || '[]')
+    } catch {
+        return []
+    }
+}
+
+export const archiveGun = (gun) => {
+    const current = getArchivedGuns()
+    const id = gun.id || gun.name
+    if (!current.some((g) => (g.id || g.name) === id)) {
+        const updated = [...current, { ...gun, archivedAt: new Date().toISOString() }]
+        localStorage.setItem(ARCHIVE_KEY, JSON.stringify(updated))
+    }
+}
+
+export const restoreGun = (id) => {
+    const current = getArchivedGuns()
+    const updated = current.filter((g) => (g.id || g.name) !== id)
+    localStorage.setItem(ARCHIVE_KEY, JSON.stringify(updated))
+    return updated
+}
+
+export const permanentDeleteGun = (id) => {
+    return restoreGun(id)
+}
